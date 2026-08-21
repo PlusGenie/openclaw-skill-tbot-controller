@@ -3,9 +3,19 @@
 
 Reads the overlay signal JSONL produced by
 skills/tbot-backtest/scripts/generate_b2_overlay_signals.py (jennie-workspace)
-and prints NEW confirmed overlay signals since the last check (offset state,
+and prints NEW actionable overlay signals since the last check (offset state,
 same pattern as check_new_signals.py). Advisory only — no orders, no TBOT
 involvement, no tbot-wind-red writes.
+
+Actionable = generator record with decision == "confirmed" (B2 + gate pass,
+inside 10-15 ET execution window, outside earnings blackout). Records the
+generator marks skipped_tod / skipped_blackout keep confirmed=True but
+decision != "confirmed" — they must NOT be printed (critic D112.1).
+
+Single risk bucket (critic D112.2): SMH and SOXX are >0.90 correlated. If
+both emit a confirmed signal on the same trading day, at most one is kept
+(the earliest bar). The loser is logged to overrides.csv with reason_code
+"bucket" (per override-protocol.md) and reported in output.
 
 Usage:
     python scripts/tbotoverlay.py [--jsonl PATH] [--raw] [--reset]
@@ -16,9 +26,10 @@ Exit code 0 always (heartbeat-friendly); output = new confirmed signals.
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 DEFAULT_JSONLS = [
@@ -27,10 +38,13 @@ DEFAULT_JSONLS = [
     Path("/Users/plusgenie/develop/jennie-workspace/skills/tbot-backtest/"
          "results/overlay/SOXX_overlay_signals.jsonl"),
 ]
+OVERRIDES_CSV = Path("/Users/plusgenie/develop/jennie-workspace/skills/"
+                     "tbot-backtest/results/overlay/overrides.csv")
+OVERRIDES_HEADER = ["timestamp_et", "symbol", "bar_time_utc", "reason_code",
+                    "note"]
 
 
-def fmt_line(ln: str) -> str:
-    d = json.loads(ln)
+def fmt_line(d: dict) -> str:
     ts = d.get("bar_time_et", "?")
     sizing = d.get("sizing") or {}
     qty = sizing.get("qty_est")
@@ -48,6 +62,34 @@ def fmt_line(ln: str) -> str:
     return " | ".join(parts)
 
 
+def _bar_day_utc(d: dict) -> str:
+    """Trading day (UTC date) of the signal bar, for bucket conflicts."""
+    ts = d.get("bar_time_utc", "")
+    if not ts:
+        return ""
+    try:
+        return datetime.fromisoformat(ts).astimezone(
+            timezone.utc).strftime("%Y-%m-%d")
+    except ValueError:
+        return ""
+
+
+def log_bucket_skip(kept: dict, skipped: dict, now_et: str) -> None:
+    """Append the auto-enforced bucket skip to overrides.csv (protocol doc:
+    reason_code 'bucket'). Creates file + header on first write."""
+    row = [now_et, skipped.get("symbol", "?"),
+           skipped.get("bar_time_utc", ""), "bucket",
+           f"same-day {kept.get('symbol')} kept (earlier bar) — "
+           f"single semiconductor bucket, auto-enforced"]
+    new = not OVERRIDES_CSV.exists()
+    OVERRIDES_CSV.parent.mkdir(parents=True, exist_ok=True)
+    with OVERRIDES_CSV.open("a", newline="", encoding="utf-8") as fh:
+        w = csv.writer(fh)
+        if new:
+            w.writerow(OVERRIDES_HEADER)
+        w.writerow(row)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--jsonl", action="append", type=Path, default=None,
@@ -57,6 +99,7 @@ def main() -> int:
     args = ap.parse_args()
 
     jsonls = args.jsonl or DEFAULT_JSONLS
+    actionable: list[dict] = []
     printed = 0
     for jsonl in jsonls:
         if not jsonl.is_file():
@@ -86,15 +129,40 @@ def main() -> int:
             if not ln:
                 continue
             d = json.loads(ln)
-            if not d.get("confirmed"):
-                continue  # only actionable overlay signals
-            print(ln if args.raw else fmt_line(ln))
-            printed += 1
-    if printed == 0:
+            # D112.1: only truly actionable records — generator keeps
+            # confirmed=True on skipped_tod / skipped_blackout records.
+            if d.get("decision") != "confirmed":
+                continue
+            actionable.append(d)
+    if not actionable:
         return 0
-    print(f"\nReminder (advisory only): manual paper order on the paper "
-          f"account; flip exit + 3xATR guardrail; VWRP core unchanged; "
-          f"single semiconductor bucket (SMH/SOXX max 1 position).")
+
+    # D112.2: single semiconductor bucket — same trading day (UTC) across
+    # symbols -> keep the earliest bar, auto-log the loser.
+    actionable.sort(key=lambda r: r.get("bar_time_utc", ""))
+    now_et = datetime.now().astimezone().strftime("%Y-%m-%d %H:%M")
+    kept: list[dict] = []
+    day_holder: dict[str, dict] = {}
+    for d in actionable:
+        day = _bar_day_utc(d)
+        holder = day_holder.get(day)
+        if holder is None:
+            day_holder[day] = d
+            kept.append(d)
+        else:
+            # same day, second symbol -> bucket conflict
+            print(f"⛔ BUCKET SKIP: {d.get('symbol')} {d.get('bar_time_et')} "
+                  f"— same-day {holder.get('symbol')} kept (single "
+                  f"semiconductor bucket, auto-enforced)", file=sys.stderr)
+            log_bucket_skip(holder, d, now_et)
+
+    for d in kept:
+        print(d if args.raw else fmt_line(d))
+        printed += 1
+    if printed:
+        print(f"\nReminder (advisory only): manual paper order on the paper "
+              f"account; flip exit + 3xATR guardrail; VWRP core unchanged; "
+              f"single semiconductor bucket (SMH/SOXX max 1 position).")
     return 0
 
 
