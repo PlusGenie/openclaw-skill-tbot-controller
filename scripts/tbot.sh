@@ -36,6 +36,9 @@ case "$cmd" in
   json)
     exec "${PYTHON_EXEC[@]}" "$SCRIPT_DIR/tbotjson.py" "$@"
     ;;
+  overlay)
+    exec "${PYTHON_EXEC[@]}" "$SCRIPT_DIR/tbotoverlay.py" "$@"
+    ;;
   status)
     if [[ -f "$SCRIPT_DIR/tbotstatus.py" ]]; then
       exec "${PYTHON_EXEC[@]}" "$SCRIPT_DIR/tbotstatus.py" "$@"
@@ -56,7 +59,7 @@ Examples:
   scripts/tbot.sh ctl status
   scripts/tbot.sh ctl logs --tail 200
   scripts/tbot.sh ctl start --run-it
-  scripts/tbot.sh json --ticker IBM --direction strategy.entrylong --orderRef r1 --contract stock --metric qty=500
+  scripts/tbot.sh overlay [--jsonl PATH] [--raw] [--reset]   # new paper-overlay signals
   TBOT_WEBHOOK_URL="http://127.0.0.1:5001/webhook" RUN_IT=1 scripts/tbot.sh json --ticker NFLX --direction strategy.close --orderRef CloseNFLX50 --contract stock --metric qty=50 --key "WebhookReceived:123456"
 EOF
     ;;
