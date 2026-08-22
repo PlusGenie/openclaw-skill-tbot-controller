@@ -1,6 +1,14 @@
 #!/usr/bin/env python3
 """tbotoverlay.py — paper-overlay signal consumer (plan NN 109, tbot-controller).
 
+⚠️ DEPRECATED (2026-08-22, P4 cutover, session 2026-08-22-002):
+SUPERSEDED by the boat-side AlphaTrendDecisionObserver
+(tbot-tradingboat-red/src/tbot_tradingboat/pg_overlay/alpha_trend_decision_observer.py,
+NN 119 P2/P3, live-verified 2026-08-22 — synthetic entrylong → OVR-ORDER-60 →
+IB paper order). This consumer was advisory-only and is NO LONGER SCHEDULED
+(no OpenClaw cron, host crontab, or LaunchAgent references it). Kept for
+reference only; do not re-enable without re-review.
+
 Reads the overlay signal JSONL produced by
 skills/tbot-backtest/scripts/generate_b2_overlay_signals.py (jennie-workspace)
 and prints NEW actionable overlay signals since the last check (offset state,
